@@ -1,0 +1,207 @@
+import logging
+import pandas as pd
+from datetime import datetime
+from urllib.parse import urlparse, parse_qs
+import requests
+
+from app_store_review_scraper.scrapers.google_play_scraper import GooglePlayScraper
+from app_store_review_scraper.scrapers.app_store_scraper import AppStoreScraper
+from app_store_review_scraper.analysis.summarizer import ReviewAnalyzer
+from app_store_review_scraper.notifications.email_sender import EmailSender
+from app_store_review_scraper.models.base import init_db, SessionLocal
+from app_store_review_scraper.models.review import Review, ReviewSource, ReviewSentiment
+import config
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+def save_reviews_to_db(df: pd.DataFrame, app_id: str):
+    """Save reviews to database, avoiding duplicates"""
+    if df.empty:
+        return
+    db = SessionLocal()
+    try:
+        new_count = 0
+        for _, row in df.iterrows():
+            review_id = row.get('reviewId') or row.get('id')
+            if not review_id:
+                import hashlib
+                unique_str = f"{row['user_name']}{row['review_date']}{row['review_text'][:20]}"
+                review_id = hashlib.md5(unique_str.encode()).hexdigest()
+            if db.query(Review).filter(Review.review_id == str(review_id)).first():
+                continue
+            review = Review(
+                review_id=str(review_id),
+                source=ReviewSource(row['source']),
+                app_id=app_id,
+                app_version=row.get('app_version'),
+                user_name=row.get('user_name'),
+                rating=row['rating'],
+                title=row.get('title'),
+                content=row['review_text'],
+                review_date=row['review_date'],
+                country='us',
+                developer_reply=row.get('developer_reply'),
+                developer_reply_date=row.get('reply_date'),
+                thumbs_up=row.get('thumbs_up', 0),
+                is_edited=row.get('is_edited', False)
+            )
+            if 'sentiment' in row:
+                try:
+                    review.sentiment = ReviewSentiment(row['sentiment'])
+                    review.sentiment_score = row.get('sentiment_score')
+                except ValueError:
+                    pass
+            db.add(review)
+            new_count += 1
+        db.commit()
+        logger.info(f"Saved {new_count} new reviews to database")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error saving reviews: {str(e)}")
+    finally:
+        db.close()
+
+def parse_play_url(url: str):
+    """Extract the package name, language, and country from a Google Play Store URL"""
+    parsed = urlparse(url.strip())
+    if 'play.google.com' not in parsed.netloc.lower():
+        return None
+    qs = parse_qs(parsed.query)
+    pkg = qs.get('id', [None])[0]
+    if not pkg:
+        parts = parsed.path.split('/')
+        if 'details' in parts:
+            idx = parts.index('details') + 1
+            if idx < len(parts) and parts[idx].startswith('id='):
+                pkg = parts[idx][3:]
+    
+    # Extract language (hl) and country (gl)
+    lang = qs.get('hl', ['en'])[0]
+    country = qs.get('gl', ['us'])[0]
+    
+    # If lang is like 'en_IN', split it.
+    # google-play-scraper prefers 'en' over 'en_IN' for the lang parameter, 
+    # while 'in' should be passed as the country parameter.
+    if '_' in lang:
+        parts = lang.split('_')
+        if len(parts) == 2:
+            # If country (gl) wasn't explicitly set, use the region from lang
+            if country == 'us' and 'gl' not in qs:
+                country = parts[1].lower()
+            # Strip region from lang to keep it simple (e.g. 'en')
+            lang = parts[0]
+            
+    return {'package_name': pkg, 'lang': lang, 'country': country}
+
+def lookup_apple_app(package_name: str):
+    """Check if an app with the given Android package exists on the Apple App Store.
+    Returns a tuple (app_id, app_name) if found, otherwise (None, None).
+    """
+    try:
+        resp = requests.get('https://itunes.apple.com/lookup', params={'bundleId': package_name}, timeout=10)
+        data = resp.json()
+        if data.get('resultCount', 0) > 0:
+            result = data['results'][0]
+            return str(result.get('trackId')), result.get('trackName')
+    except Exception as e:
+        logger.error(f"Apple lookup failed: {e}")
+    return None, None
+
+def run_scraper():
+    """Main execution: ask for Play Store URL, optionally scrape Apple Store if app exists"""
+    logger.info("Starting review scraper...")
+    init_db()
+    analyzer = ReviewAnalyzer()
+    all_reviews = []
+
+    play_url = input("Enter the Google Play Store URL of the app to scrape: ").strip()
+    parsed_data = parse_play_url(play_url)
+    if not parsed_data or not parsed_data['package_name']:
+        logger.error("Could not parse a valid Google Play package name from the URL.")
+        return
+    
+    package_name = parsed_data['package_name']
+    lang = parsed_data['lang']
+    country = parsed_data['country']
+    
+    logger.info(f"Detected Google Play package: {package_name}, Lang: {lang}, Country: {country}")
+
+    gp_scraper = GooglePlayScraper(package_name, lang=lang, country=country)
+    gp_reviews = gp_scraper.get_reviews(days=config.SCRAPE_DAYS, max_reviews=config.MAX_REVIEWS)
+    if not gp_reviews.empty:
+        logger.info("Analyzing Google Play reviews...")
+        gp_reviews['sentiment_score'] = gp_reviews['review_text'].apply(lambda x: analyzer.analyze_sentiment(x)[1])
+        gp_reviews['sentiment'] = gp_reviews['sentiment_score'].apply(
+            lambda x: "positive" if x > 0.1 else ("negative" if x < -0.1 else "neutral")
+        )
+        save_reviews_to_db(gp_reviews, package_name)
+        all_reviews.append(gp_reviews)
+    else:
+        logger.info("No Google Play reviews fetched.")
+
+    apple_id, apple_name = lookup_apple_app(package_name)
+    if apple_id:
+        logger.info(f"App found on Apple App Store: {apple_name} (ID: {apple_id})")
+        as_scraper = AppStoreScraper(apple_name, apple_id)
+        as_reviews = as_scraper.get_reviews(days=config.SCRAPE_DAYS, max_reviews=config.MAX_REVIEWS)
+        if not as_reviews.empty:
+            logger.info("Analyzing Apple App Store reviews...")
+            as_reviews['sentiment_score'] = as_reviews['review_text'].apply(lambda x: analyzer.analyze_sentiment(x)[1])
+            as_reviews['sentiment'] = as_reviews['sentiment_score'].apply(
+                lambda x: "positive" if x > 0.1 else ("negative" if x < -0.1 else "neutral")
+            )
+            save_reviews_to_db(as_reviews, apple_id)
+            all_reviews.append(as_reviews)
+        else:
+            logger.info("Apple App Store returned no reviews.")
+    else:
+        logger.info("App not found on Apple App Store; skipping Apple scraping.")
+
+    if all_reviews:
+        combined_df = pd.concat(all_reviews, ignore_index=True)
+        summary = analyzer.generate_summary(combined_df)
+        print("\n" + "="*50)
+        print("REVIEW SUMMARY REPORT")
+        print("="*50)
+        print(f"Total Reviews: {summary['total_reviews']}")
+        print(f"Average Rating: {summary['average_rating']}")
+        print("\nSentiment Distribution:")
+        for sentiment, count in summary['sentiment_distribution'].items():
+            print(f"  {sentiment}: {count}")
+        print("\nTop Keywords:")
+        for keyword, count in summary['top_keywords']:
+            print(f"  {keyword}: {count}")
+        print("\nRecent Critical Reviews:")
+        for rev in summary['recent_critical_reviews']:
+            print(f"  - [{rev['rating']}*] {rev['review_date']}: {rev['review_text'][:100]}...")
+        if config.SMTP_USER and config.SMTP_PASSWORD and config.RECIPIENT_EMAILS:
+            logger.info("Sending email report...")
+            email_sender = EmailSender(
+                smtp_server=config.SMTP_SERVER,
+                smtp_port=config.SMTP_PORT,
+                username=config.SMTP_USER,
+                password=config.SMTP_PASSWORD
+            )
+            success = email_sender.send_summary_report(
+                summary=summary,
+                app_name=apple_name or package_name,
+                recipients=[e for e in config.RECIPIENT_EMAILS if e.strip()],
+                reviews_df=combined_df,
+                days=config.SCRAPE_DAYS
+            )
+            if success:
+                logger.info("Email report sent successfully")
+            else:
+                logger.error("Failed to send email report")
+        else:
+            logger.info("Email not configured. Skipping email notification.")
+    else:
+        logger.info("No reviews fetched from any source.")
+
+if __name__ == "__main__":
+    run_scraper()
