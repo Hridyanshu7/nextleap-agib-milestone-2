@@ -1,17 +1,38 @@
 import pandas as pd
 from textblob import TextBlob
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 from collections import Counter
 import re
 import logging
+import json
+
+try:
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
 
 class ReviewAnalyzer:
     """
     A class to analyze app reviews for sentiment and summaries.
     """
     
-    def __init__(self):
+    def __init__(self, gemini_api_key: Optional[str] = None):
         self.logger = logging.getLogger(__name__)
+        self.gemini_model = None
+        
+        # Initialize Gemini if API key is provided
+        if gemini_api_key and GEMINI_AVAILABLE:
+            try:
+                genai.configure(api_key=gemini_api_key)
+                self.gemini_model = genai.GenerativeModel('gemini-2.5-flash')
+                self.logger.info("Gemini API initialized successfully with gemini-2.5-flash")
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize Gemini API: {e}. Falling back to basic analysis.")
+        elif gemini_api_key and not GEMINI_AVAILABLE:
+            self.logger.warning("Gemini API key provided but google-generativeai not installed. Falling back to basic analysis.")
+        else:
+            self.logger.info("No Gemini API key provided. Using basic analysis.")
         
     def clean_text(self, text: str) -> str:
         """
@@ -72,35 +93,135 @@ class ReviewAnalyzer:
 
     def extract_themes(self, df: pd.DataFrame, max_themes: int = 5) -> List[Tuple[str, int]]:
         """
-        Group reviews into themes using keyword clustering or simple frequency.
-        For simplicity and robustness without heavy ML dependencies, we'll use 
-        noun phrase frequency mapping to broader categories if possible, 
-        or just return the top distinct noun phrases as themes.
+        Group reviews into themes using LLM if available, otherwise use keyword clustering.
         """
-        # Get all noun phrases
+        if self.gemini_model:
+            return self._extract_themes_llm(df, max_themes)
+        else:
+            return self._extract_themes_basic(df, max_themes)
+    
+    def _extract_themes_llm(self, df: pd.DataFrame, max_themes: int = 5) -> List[Tuple[str, int]]:
+        """Use Gemini to extract themes from reviews."""
+        try:
+            # Sample reviews for analysis (max 100 to stay within token limits)
+            sample_size = min(100, len(df))
+            sample_reviews = df.sample(sample_size)['review_text'].tolist()
+            reviews_text = "\n".join([f"- {r[:200]}" for r in sample_reviews if isinstance(r, str)])
+            
+            prompt = f"""Analyze these app reviews and infer the top {max_themes} broad themes based on the nature of user feedback and sentiment.
+Instead of just keywords, identify qualitative themes (e.g., "Unreliable Delivery Service", "App Crashing on Payment", "Excellent Customer Support").
+
+For each theme:
+1. Provide a descriptive theme name (3-6 words)
+2. Estimate the number of reviews related to this theme
+
+Reviews:
+{reviews_text}
+
+Return ONLY a JSON array in this exact format:
+[{{"theme": "Descriptive Theme Name", "count": estimated_number}}, ...]
+
+Ensure you return exactly {max_themes} themes. Do not include any other text."""
+
+            response = self.gemini_model.generate_content(prompt)
+            result = self._extract_json_from_response(response.text)
+            
+            # Extrapolate counts to full dataset
+            scaling_factor = len(df) / sample_size
+            
+            themes = []
+            for item in result[:max_themes]:
+                estimated_count = int(item['count'] * scaling_factor)
+                themes.append((item['theme'], estimated_count))
+                
+            return themes
+        except Exception as e:
+            self.logger.warning(f"LLM theme extraction failed: {e}. Falling back to basic method.")
+            if 'response' in locals():
+                self.logger.debug(f"Raw LLM response: {response.text}")
+            return self._extract_themes_basic(df, max_themes)
+    
+    def _extract_json_from_response(self, text: str):
+        """Extract JSON from LLM response, handling markdown code blocks and extra text."""
+        # Remove markdown code blocks if present
+        if '```json' in text:
+            text = text.split('```json')[1].split('```')[0]
+        elif '```' in text:
+            text = text.split('```')[1].split('```')[0]
+        
+        # Strip whitespace
+        text = text.strip()
+        
+        # Try to find JSON array or object
+        if not text.startswith('[') and not text.startswith('{'):
+            # Try to find the first [ or {
+            start_bracket = text.find('[')
+            start_brace = text.find('{')
+            
+            if start_bracket != -1 and (start_brace == -1 or start_bracket < start_brace):
+                text = text[start_bracket:]
+            elif start_brace != -1:
+                text = text[start_brace:]
+        
+        return json.loads(text)
+    
+    def _extract_themes_basic(self, df: pd.DataFrame, max_themes: int = 5) -> List[Tuple[str, int]]:
+        """Basic theme extraction using noun phrase frequency."""
         texts = df['review_text'].tolist()
         all_text = " ".join([self.clean_text(t) for t in texts if isinstance(t, str)])
         blob = TextBlob(all_text)
         noun_phrases = blob.noun_phrases
         
-        # Count frequencies
         counts = Counter(noun_phrases)
-        
-        # Filter out very short or generic phrases
         filtered_counts = {k: v for k, v in counts.items() if len(k.split()) > 1 or len(k) > 4}
         
-        # Return top N themes
         return Counter(filtered_counts).most_common(max_themes)
 
     def generate_action_ideas(self, df: pd.DataFrame) -> List[str]:
         """
-        Generate action ideas based on negative reviews.
+        Generate action ideas based on negative reviews using LLM if available.
         """
+        if self.gemini_model:
+            return self._generate_action_ideas_llm(df)
+        else:
+            return self._generate_action_ideas_basic(df)
+    
+    def _generate_action_ideas_llm(self, df: pd.DataFrame) -> List[str]:
+        """Use Gemini to generate actionable insights from negative reviews."""
+        try:
+            negative_reviews = df[df['sentiment'] == 'negative']
+            if negative_reviews.empty:
+                return ["Monitor for new feedback", "Engage with positive reviewers", "Maintain current performance"]
+            
+            # Sample negative reviews
+            sample_size = min(50, len(negative_reviews))
+            sample_reviews = negative_reviews.sample(sample_size)['review_text'].tolist()
+            reviews_text = "\n".join([f"- {r[:200]}" for r in sample_reviews if isinstance(r, str)])
+            
+            prompt = f"""Based on these negative app reviews, suggest 3 specific, actionable improvements the development team should prioritize.
+Make each suggestion concrete and implementable.
+
+Negative Reviews:
+{reviews_text}
+
+Return ONLY a JSON array of 3 action items in this exact format:
+["Action 1", "Action 2", "Action 3"]
+
+Do not include any other text or explanation."""
+
+            response = self.gemini_model.generate_content(prompt)
+            result = self._extract_json_from_response(response.text)
+            return result[:3]
+        except Exception as e:
+            self.logger.warning(f"LLM action ideas generation failed: {e}. Falling back to basic method.")
+            return self._generate_action_ideas_basic(df)
+    
+    def _generate_action_ideas_basic(self, df: pd.DataFrame) -> List[str]:
+        """Basic action ideas generation from keywords."""
         negative_reviews = df[df['sentiment'] == 'negative']
         if negative_reviews.empty:
             return ["Monitor for new feedback", "Engage with positive reviewers", "Maintain current performance"]
             
-        # Extract common complaints (keywords in negative reviews)
         complaints = self.extract_keywords(negative_reviews['review_text'].tolist(), top_n=3)
         
         actions = []
@@ -111,6 +232,50 @@ class ReviewAnalyzer:
             actions = ["Review recent negative feedback for specific bugs", "Improve response time to critical reviews", "Check app stability"]
             
         return actions[:3]
+    
+    def select_representative_quotes(self, df: pd.DataFrame, num_quotes: int = 3) -> List[str]:
+        """
+        Select representative user quotes using LLM if available.
+        """
+        if self.gemini_model:
+            return self._select_quotes_llm(df, num_quotes)
+        else:
+            return self._select_quotes_basic(df, num_quotes)
+    
+    def _select_quotes_llm(self, df: pd.DataFrame, num_quotes: int = 3) -> List[str]:
+        """Use Gemini to select the most representative quotes."""
+        try:
+            # Sample reviews from different sentiment categories
+            sample_size = min(50, len(df))
+            sample_reviews = df.sample(sample_size)['review_text'].tolist()
+            reviews_text = "\n".join([f"- {r[:200]}" for r in sample_reviews if isinstance(r, str)])
+            
+            prompt = f"""From these app reviews, select {num_quotes} quotes that best represent the overall user experience.
+Choose quotes that are:
+1. Specific and informative
+2. Represent different aspects of the app
+3. Are concise and clear
+
+Reviews:
+{reviews_text}
+
+Return ONLY a JSON array of {num_quotes} selected quotes in this exact format:
+["Quote 1", "Quote 2", "Quote 3"]
+
+Do not include any other text or explanation."""
+
+            response = self.gemini_model.generate_content(prompt)
+            result = self._extract_json_from_response(response.text)
+            # Scrub PII from selected quotes
+            return [self.scrub_pii(quote) for quote in result[:num_quotes]]
+        except Exception as e:
+            self.logger.warning(f"LLM quote selection failed: {e}. Falling back to basic method.")
+            return self._select_quotes_basic(df, num_quotes)
+    
+    def _select_quotes_basic(self, df: pd.DataFrame, num_quotes: int = 3) -> List[str]:
+        """Basic quote selection - random sampling."""
+        safe_texts = df['safe_text'] if 'safe_text' in df.columns else df['review_text'].apply(self.scrub_pii)
+        return safe_texts.sample(min(num_quotes, len(df))).tolist()
 
     def generate_summary(self, df: pd.DataFrame) -> Dict:
         """
@@ -149,7 +314,7 @@ class ReviewAnalyzer:
                 (df['rating'] <= 2) | (df['sentiment'] == 'negative')
             ].sort_values('review_date', ascending=False).head(5)[['review_date', 'rating', 'safe_text']].rename(columns={'safe_text': 'review_text'}).to_dict('records'),
             "top_themes": self.extract_themes(df),
-            "user_quotes": df.sample(min(3, len(df)))['safe_text'].tolist(),
+            "user_quotes": self.select_representative_quotes(df),
             "action_ideas": self.generate_action_ideas(df)
         }
         

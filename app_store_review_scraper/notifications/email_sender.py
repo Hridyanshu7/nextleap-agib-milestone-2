@@ -59,7 +59,7 @@ class EmailSender:
         
         # Top Themes
         theme_items = ""
-        for theme, count in summary.get('top_themes', [])[:3]:
+        for theme, count in summary.get('top_themes', [])[:5]:
             theme_items += f"<li><strong>{theme}</strong>: {count} mentions</li>"
 
         # User Quotes
@@ -160,7 +160,7 @@ class EmailSender:
                 </div>
             </div>
 
-            <h2 class="section-title">🔥 Top 3 Themes</h2>
+            <h2 class="section-title">🔥 Top 5 Themes</h2>
             <ul style="list-style-type: none; padding: 0;">
                 {theme_items if theme_items else "<li>No significant themes detected.</li>"}
             </ul>
@@ -243,7 +243,8 @@ class EmailSender:
                     self.logger.info(f"Attached file: {os.path.basename(attachment_path)}")
             
             # Connect to SMTP server and send
-            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
+            with smtplib.SMTP(self.smtp_server, self.smtp_port, timeout=30) as server:
+                server.set_debuglevel(0)  # Set to 1 for verbose SMTP debugging
                 server.starttls()
                 server.login(self.username, self.password)
                 server.send_message(msg)
@@ -251,8 +252,17 @@ class EmailSender:
             self.logger.info(f"Email sent successfully to {len(recipients)} recipients")
             return True
             
+        except smtplib.SMTPAuthenticationError as e:
+            self.logger.error(f"SMTP Authentication failed: {str(e)}. Check your email and app password.")
+            return False
+        except smtplib.SMTPException as e:
+            self.logger.error(f"SMTP error: {str(e)}")
+            return False
+        except TimeoutError as e:
+            self.logger.error(f"Connection timeout: {str(e)}. Check your network connection.")
+            return False
         except Exception as e:
-            self.logger.error(f"Error sending email: {str(e)}")
+            self.logger.error(f"Error sending email: {type(e).__name__}: {str(e)}")
             return False
     
     def format_date_range(self, days: int) -> str:

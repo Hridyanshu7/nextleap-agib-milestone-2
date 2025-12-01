@@ -28,3 +28,6 @@ SMTP_PORT = int(os.getenv('SMTP_PORT', 587))
 SMTP_USER = os.getenv('SMTP_USER')
 SMTP_PASSWORD = os.getenv('SMTP_PASSWORD')
 RECIPIENT_EMAILS = os.getenv('RECIPIENT_EMAILS', '').split(',')
+
+# LLM Settings (Optional - for enhanced analysis)
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')

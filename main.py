@@ -116,7 +116,7 @@ def run_scraper():
     """Main execution: ask for Play Store URL, optionally scrape Apple Store if app exists"""
     logger.info("Starting review scraper...")
     init_db()
-    analyzer = ReviewAnalyzer()
+    analyzer = ReviewAnalyzer(gemini_api_key=config.GEMINI_API_KEY)
     all_reviews = []
 
     play_url = input("Enter the Google Play Store URL of the app to scrape: ").strip()
@@ -132,6 +132,15 @@ def run_scraper():
     logger.info(f"Detected Google Play package: {package_name}, Lang: {lang}, Country: {country}")
 
     gp_scraper = GooglePlayScraper(package_name, lang=lang, country=country)
+    
+    # Fetch the actual app name from Play Store
+    app_name = gp_scraper.get_app_name()
+    if not app_name:
+        app_name = package_name  # Fallback to package name if fetch fails
+        logger.warning(f"Could not fetch app name, using package name: {package_name}")
+    else:
+        logger.info(f"App name: {app_name}")
+    
     gp_reviews = gp_scraper.get_reviews(days=config.SCRAPE_DAYS, max_reviews=config.MAX_REVIEWS)
     if not gp_reviews.empty:
         logger.info("Analyzing Google Play reviews...")
@@ -189,7 +198,7 @@ def run_scraper():
             )
             success = email_sender.send_summary_report(
                 summary=summary,
-                app_name=apple_name or package_name,
+                app_name=app_name,
                 recipients=[e for e in config.RECIPIENT_EMAILS if e.strip()],
                 reviews_df=combined_df,
                 days=config.SCRAPE_DAYS

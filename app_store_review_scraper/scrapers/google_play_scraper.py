@@ -1,4 +1,4 @@
-from google_play_scraper import Sort, reviews
+from google_play_scraper import Sort, reviews, app
 from typing import Dict, List, Optional
 import pandas as pd
 from datetime import datetime
@@ -19,6 +19,19 @@ class GooglePlayScraper:
         self.lang = lang
         self.country = country
         self.logger = logging.getLogger(__name__)
+
+    def get_app_name(self) -> Optional[str]:
+        """Fetch the app name from Google Play Store.
+        
+        Returns:
+            str: The app name, or None if fetch fails
+        """
+        try:
+            app_details = app(self.app_id, lang=self.lang, country=self.country)
+            return app_details.get('title')
+        except Exception as e:
+            self.logger.error(f"Error fetching app name: {str(e)}")
+            return None
 
     def fetch_reviews(self, days: int = 7, max_reviews: Optional[int] = None) -> List[Dict]:
         """Fetch reviews from Google Play Store.
