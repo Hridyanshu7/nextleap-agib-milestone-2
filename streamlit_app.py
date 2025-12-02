@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 try:
     import nltk
     nltk.download('punkt')
+    nltk.download('punkt_tab')
     nltk.download('brown')
     nltk.download('averaged_perceptron_tagger')
 except Exception as e:
@@ -46,6 +47,7 @@ if 'summary' not in st.session_state:
     st.session_state['summary'] = None
 if 'app_name' not in st.session_state:
     st.session_state['app_name'] = None
+
 
 # Custom CSS
 st.markdown("""
@@ -281,7 +283,7 @@ with tab1:
 with tab2:
     st.header("📊 Analysis Results")
     
-    if st.session_state.get('reviews_df') is None:
+    if st.session_state.get('reviews_df') is None or st.session_state.get('summary') is None:
         st.info("👈 Start by scraping reviews in the **Scrape Reviews** tab")
     else:
         df = st.session_state['reviews_df']
