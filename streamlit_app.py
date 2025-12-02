@@ -22,6 +22,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Download NLTK data
+try:
+    import nltk
+    nltk.download('punkt')
+    nltk.download('brown')
+    nltk.download('averaged_perceptron_tagger')
+except Exception as e:
+    logger.warning(f"Failed to download NLTK data: {e}")
+
 # Page configuration
 st.set_page_config(
     page_title="App Review Scraper",
@@ -29,6 +38,14 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Initialize session state
+if 'reviews_df' not in st.session_state:
+    st.session_state['reviews_df'] = None
+if 'summary' not in st.session_state:
+    st.session_state['summary'] = None
+if 'app_name' not in st.session_state:
+    st.session_state['app_name'] = None
 
 # Custom CSS
 st.markdown("""
