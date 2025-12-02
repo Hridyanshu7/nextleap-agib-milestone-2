@@ -5,7 +5,6 @@ An automated system to scrape, analyze, and summarize app reviews from Google Pl
 ## Features
 
 - 📱 **Multi-Platform Support**: Scrapes reviews from both Google Play Store and Apple App Store
-- 🤖 **Automated Scraping**: Scheduled weekly scraping with customizable intervals
 - 📊 **Sentiment Analysis**: Analyzes review sentiment using TextBlob NLP
 - 🔑 **Keyword Extraction**: Identifies trending topics and common phrases
 - 📧 **Email Reports**: Beautiful HTML email reports with key metrics
@@ -77,6 +76,17 @@ RECIPIENT_EMAILS=recipient1@example.com,recipient2@example.com
 python main.py
 ```
 
+**URL Input:**
+- The script will prompt for a Google Play Store URL with a **5-second timeout**
+- If no input is provided, it defaults to the **Groww app** (`com.nextbillion.groww`)
+- It then attempts to find the corresponding Apple App Store app automatically
+- If not found, it prompts for an Apple App Store URL with a **5-second timeout**
+- If no input is provided, it defaults to the **Groww iOS app**
+
+**Example URLs:**
+- Google Play: `https://play.google.com/store/apps/details?id=com.nextbillion.groww&hl=en_IN`
+- Apple App Store: `https://apps.apple.com/in/app/groww-stocks-mutual-fund-ipo/id1404871703`
+
 This will:
 1. Scrape reviews from configured apps
 2. Analyze sentiment and extract keywords
@@ -84,31 +94,8 @@ This will:
 4. Generate and print summary report
 5. Send email report (if configured)
 
-### Run Scheduled
 
-```bash
-python scheduler.py
-```
 
-This will:
-1. Run the scraper immediately
-2. Schedule weekly runs (default: Monday 9:00 AM)
-3. Log all activities to `scheduler.log`
-
-### Customize Schedule
-
-Edit `scheduler.py`:
-
-```python
-# Weekly on Monday at 9 AM
-schedule.every().monday.at("09:00").do(job)
-
-# Or every 5 minutes for testing
-schedule.every(5).minutes.do(job)
-
-# Or daily at 10 AM
-schedule.every().day.at("10:00").do(job)
-```
 
 ## Project Structure
 
@@ -130,7 +117,7 @@ nextleap-agib-milestone-2/
 │       └── app_store_scraper.py   # App Store scraper
 ├── config.py                      # Configuration
 ├── main.py                        # Main execution script
-├── scheduler.py                   # Scheduling script
+
 ├── requirements.txt               # Dependencies
 ├── .env.example                   # Environment template
 └── DEV-PLAN.md                   # Development plan

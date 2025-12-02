@@ -112,6 +112,63 @@ def lookup_apple_app(package_name: str, country: str = 'us'):
         logger.error(f"Apple lookup failed: {e}")
     return None, None
 
+def timed_input(prompt, timeout=15, default=None):
+    """
+    Get user input with a timeout. Returns default if timeout occurs.
+    
+    Args:
+        prompt (str): The input prompt to display
+        timeout (int): Timeout in seconds
+        default (str): Default value if timeout occurs
+        
+    Returns:
+        str: User input or default value
+    """
+    import sys
+    import select
+    
+    # For Windows compatibility
+    if sys.platform == 'win32':
+        import msvcrt
+        import time
+        
+        print(prompt, end='', flush=True)
+        start_time = time.time()
+        input_str = ''
+        
+        while True:
+            if msvcrt.kbhit():
+                char = msvcrt.getwche()
+                if char == '\r':  # Enter key
+                    print()
+                    return input_str if input_str else default
+                elif char == '\b':  # Backspace
+                    if input_str:
+                        input_str = input_str[:-1]
+                        # Clear the character from console
+                        print('\b \b', end='', flush=True)
+                else:
+                    input_str += char
+            
+            if time.time() - start_time > timeout:
+                print()
+                if default:
+                    logger.info(f"No input received. Using default: {default}")
+                return default
+            
+            time.sleep(0.1)
+    else:
+        # Unix-like systems
+        print(prompt, end='', flush=True)
+        ready, _, _ = select.select([sys.stdin], [], [], timeout)
+        if ready:
+            return sys.stdin.readline().rstrip('\n')
+        else:
+            print()
+            if default:
+                logger.info(f"No input received. Using default: {default}")
+            return default
+
 def run_scraper():
     """Main execution: ask for Play Store URL, optionally scrape Apple Store if app exists"""
     logger.info("Starting review scraper...")
@@ -119,7 +176,22 @@ def run_scraper():
     analyzer = ReviewAnalyzer(gemini_api_key=config.GEMINI_API_KEY)
     all_reviews = []
 
-    play_url = input("Enter the Google Play Store URL of the app to scrape: ").strip()
+    # Default URLs for Groww app
+    default_play_url = "https://play.google.com/store/apps/details?id=com.nextbillion.groww&hl=en_IN"
+    default_apple_url = "https://apps.apple.com/in/app/groww-stocks-mutual-fund-ipo/id1404871703"
+    
+    # Get Google Play Store URL with timeout
+    play_url = timed_input(
+        "Enter the Google Play Store URL of the app to scrape (5s timeout): ",
+        timeout=5,
+        default=default_play_url
+    )
+    
+    if not play_url:
+        play_url = default_play_url
+        logger.info(f"Using default Google Play URL: {play_url}")
+    
+    play_url = play_url.strip()
     parsed_data = parse_play_url(play_url)
     if not parsed_data or not parsed_data['package_name']:
         logger.error("Could not parse a valid Google Play package name from the URL.")
@@ -158,7 +230,17 @@ def run_scraper():
     
     if not apple_id:
         logger.info("Automatic Apple App Store lookup failed.")
-        apple_url = input("Enter Apple App Store URL (or press Enter to skip): ").strip()
+        apple_url = timed_input(
+            "Enter Apple App Store URL (5s timeout, press Enter to skip): ",
+            timeout=5,
+            default=default_apple_url
+        )
+        
+        if not apple_url:
+            apple_url = default_apple_url
+            logger.info(f"Using default Apple App Store URL: {apple_url}")
+        
+        apple_url = apple_url.strip()
         if apple_url:
             # Extract ID and country from URL
             # Format: https://apps.apple.com/in/app/zepto-grocery-delivery/id1575323645

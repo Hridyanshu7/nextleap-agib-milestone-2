@@ -75,4 +75,13 @@ Thumbs.db
 # Project specific
 config.yaml
 config/*.yaml
-!config/example.yaml
+!config/example.yaml# Test and debug files
+test_*.py
+debug_*.py
+debug_*.html
+debug_*.png
+diagnose_*.py
+check_*.py
+run_test.py
+test_input.txt
+scheduler.log

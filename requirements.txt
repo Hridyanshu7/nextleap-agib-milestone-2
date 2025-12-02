@@ -7,7 +7,7 @@ python-dateutil>=2.8.2
 tqdm>=4.62.0
 numpy>=1.21.0
 scikit-learn>=1.0.0  # For text analysis and clustering
-schedule>=1.1.0  # For scheduling weekly reports
+
 
 app-store-scraper==0.3.5
 textblob>=0.17.1
