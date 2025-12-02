@@ -281,7 +281,7 @@ with tab1:
 with tab2:
     st.header("📊 Analysis Results")
     
-    if 'reviews_df' not in st.session_state:
+    if st.session_state.get('reviews_df') is None:
         st.info("👈 Start by scraping reviews in the **Scrape Reviews** tab")
     else:
         df = st.session_state['reviews_df']
