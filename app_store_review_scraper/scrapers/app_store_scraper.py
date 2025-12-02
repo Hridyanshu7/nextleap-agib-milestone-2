@@ -1,137 +1,110 @@
-from app_store_scraper import AppStore
-from typing import Dict, List, Optional
+import requests
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 import logging
+from typing import List, Dict, Optional
 import time
 
 class AppStoreScraper:
-    """
-    A class to handle scraping of Apple App Store reviews.
-    """
-    
-    def __init__(self, app_name: str, app_id: str, country: str = 'us'):
-        """
-        Initialize the App Store Scraper.
-        
-        Args:
-            app_name (str): The app name (slug) used in App Store URL
-            app_id (str): The app ID (numbers only)
-            country (str): Country code (default: 'us')
-        """
+    def __init__(self, country: str = 'us', app_name: str = None, app_id: str = None):
+        self.country = country
         self.app_name = app_name
         self.app_id = app_id
-        self.country = country
         self.logger = logging.getLogger(__name__)
-        self.app = AppStore(country=self.country, app_name=self.app_name, app_id=self.app_id)
-    
-    def fetch_reviews(self, 
-                     days: int = 7, 
-                     max_reviews: Optional[int] = None) -> List[Dict]:
+
+    def fetch_reviews(self, count: int = 100, days: int = 7) -> pd.DataFrame:
         """
-        Fetch reviews from Apple App Store.
+        Fetch reviews from Apple App Store using RSS feed.
         
         Args:
-            days (int): Number of days of reviews to fetch
-            max_reviews (int, optional): Maximum number of reviews to fetch
+            count (int): Number of reviews to fetch (max effective ~5000)
+            days (int): Number of days to look back
             
         Returns:
-            List[Dict]: List of review dictionaries
+            pd.DataFrame: DataFrame containing reviews
         """
+        from datetime import datetime, timedelta
+        
         try:
-            # Calculate the date from which to fetch reviews
-            after = datetime.now() - timedelta(days=days)
+            if not self.app_id:
+                self.logger.error("App ID is required for Apple App Store scraping")
+                return pd.DataFrame()
+
+            cutoff_date = datetime.now() - timedelta(days=days)
+            all_reviews = []
+            pages_to_fetch = min((count // 50) + 1, 100)  # Max 100 pages
             
-            # Fetch reviews
-            # Note: app_store_scraper doesn't support date filtering in the API call directly,
-            # so we might need to fetch more and filter locally.
-            # However, it fetches newest first.
+            for page in range(1, pages_to_fetch + 1):
+                url = f"https://itunes.apple.com/{self.country}/rss/customerreviews/page={page}/id={self.app_id}/sortby=mostrecent/json"
+                self.logger.info(f"Fetching Apple reviews page {page}...")
+                
+                response = requests.get(url, timeout=15)
+                
+                if response.status_code != 200:
+                    self.logger.warning(f"Failed to fetch page {page}: Status {response.status_code}")
+                    break
+                    
+                data = response.json()
+                feed = data.get('feed', {})
+                entries = feed.get('entry', [])
+                
+                if not entries:
+                    break
+                
+                page_has_recent = False
+                    
+                for entry in entries:
+                    if 'im:name' in entry: 
+                        continue
+                        
+                    try:
+                        review_date_raw = datetime.fromisoformat(entry.get('updated', {}).get('label').replace('Z', '+00:00'))
+                        # Convert to naive datetime for comparison
+                        review_date_naive = review_date_raw.replace(tzinfo=None)
+                        
+                        # Stop if we've gone past the cutoff date
+                        if review_date_naive < cutoff_date:
+                            continue
+                        
+                        page_has_recent = True
+                        review = {
+                            'review_id': entry.get('id', {}).get('label'),
+                            'user_name': entry.get('author', {}).get('name', {}).get('label'),
+                            'review_date': review_date_raw,
+                            'rating': int(entry.get('im:rating', {}).get('label', 0)),
+                            'review_title': entry.get('title', {}).get('label'),
+                            'review_text': entry.get('content', {}).get('label'),
+                            'thumbs_up': int(entry.get('im:voteCount', {}).get('label', 0)),
+                            'version': entry.get('im:version', {}).get('label'),
+                            'source': 'app_store',
+                            'app_name': self.app_name,
+                            'sentiment_score': 0.0,
+                            'sentiment': 'neutral'
+                        }
+                        all_reviews.append(review)
+                    except Exception as e:
+                        self.logger.warning(f"Error parsing review entry: {e}")
+                        continue
+                
+                # Stop if this page had no recent reviews
+                if not page_has_recent:
+                    self.logger.info(f"No more reviews from last {days} days, stopping at page {page}")
+                    break
+                
+                if len(all_reviews) >= count:
+                    break
+                    
+                time.sleep(1)
+
+            df = pd.DataFrame(all_reviews)
             
-            count = max_reviews or 200
-            self.app.review(how_many=count)
+            if not df.empty:
+                # Convert to UTC and remove timezone info
+                df['review_date'] = pd.to_datetime(df['review_date']).dt.tz_convert('UTC').dt.tz_localize(None)
+                self.logger.info(f"Successfully fetched {len(df)} reviews from Apple App Store (last {days} days)")
             
-            result = self.app.reviews
-            
-            # Filter reviews by date
-            filtered_reviews = [
-                review for review in result 
-                if review['date'] >= after
-            ]
-            
-            self.logger.info(f"Fetched {len(filtered_reviews)} reviews from App Store")
-            return filtered_reviews
-            
+            return df
+
         except Exception as e:
-            self.logger.error(f"Error fetching reviews: {str(e)}")
-            return []
-    
-    def process_reviews(self, reviews: List[Dict]) -> pd.DataFrame:
-        """
-        Process raw reviews into a structured DataFrame.
-        
-        Args:
-            reviews (List[Dict]): List of raw review dictionaries
-            
-        Returns:
-            pd.DataFrame: Processed reviews in a DataFrame
-        """
-        if not reviews:
+            self.logger.error(f"Error fetching Apple reviews: {str(e)}")
             return pd.DataFrame()
-            
-        # Convert to DataFrame
-        df = pd.DataFrame(reviews)
-        
-        # Standardize column names
-        # App Store fields: date, review, rating, isEdited, userName, title, developerResponse
-        df = df.rename(columns={
-            'date': 'review_date',
-            'userName': 'user_name',
-            'review': 'review_text',
-            'isEdited': 'is_edited'
-        })
-        
-        # Handle developer response if present
-        if 'developerResponse' in df.columns:
-            df['developer_reply'] = df['developerResponse'].apply(
-                lambda x: x.get('body') if isinstance(x, dict) else None
-            )
-            df['reply_date'] = df['developerResponse'].apply(
-                lambda x: x.get('modified') if isinstance(x, dict) else None
-            )
-        else:
-            df['developer_reply'] = None
-            df['reply_date'] = None
-            
-        # Add source and processed timestamp
-        df['source'] = 'app_store'
-        df['processed_at'] = datetime.utcnow()
-        
-        # Ensure other standard columns exist (fill with None/defaults)
-        if 'thumbs_up' not in df.columns:
-            df['thumbs_up'] = 0
-        if 'app_version' not in df.columns:
-            df['app_version'] = None
-        if 'device' not in df.columns:
-            df['device'] = None
-            
-        # Convert dates to datetime
-        date_columns = ['review_date', 'reply_date', 'processed_at']
-        for col in date_columns:
-            if col in df.columns:
-                df[col] = pd.to_datetime(df[col])
-        
-        return df
-    
-    def get_reviews(self, days: int = 7, max_reviews: Optional[int] = None) -> pd.DataFrame:
-        """
-        Get reviews and process them into a DataFrame.
-        
-        Args:
-            days (int): Number of days of reviews to fetch
-            max_reviews (int, optional): Maximum number of reviews to fetch
-            
-        Returns:
-            pd.DataFrame: Processed reviews
-        """
-        reviews = self.fetch_reviews(days=days, max_reviews=max_reviews)
-        return self.process_reviews(reviews)

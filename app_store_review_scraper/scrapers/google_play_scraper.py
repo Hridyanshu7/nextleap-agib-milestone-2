@@ -33,52 +33,84 @@ class GooglePlayScraper:
             self.logger.error(f"Error fetching app name: {str(e)}")
             return None
 
-    def fetch_reviews(self, days: int = 7, max_reviews: Optional[int] = None) -> List[Dict]:
-        """Fetch reviews from Google Play Store.
-
+    def fetch_reviews(self, days: int = 7, max_reviews: Optional[int] = None) -> pd.DataFrame:
+        """Fetch reviews from Google Play Store by rating to maximize coverage.
+        
         Args:
-            days (int): Number of days of reviews to fetch (kept for API compatibility but not used)
-            max_reviews (int, optional): Maximum number of reviews to fetch
-        Returns:
-            List[Dict]: List of review dictionaries
-        """
-
-        try:
-            # Fetch reviews using pagination to reach max_reviews (or 1000)
-            fetched = []
-            next_token = None
-            target_count = max_reviews or 1000
+            days (int): Number of days of reviews to fetch
+            max_reviews (int, optional): Maximum total reviews to fetch (default: 5000)
             
-            while len(fetched) < target_count:
-                # API limit per request is usually around 200, but we can request more and let the library handle it or loop
-                # The library 'reviews' function 'count' parameter is for the current batch.
-                count = min(200, target_count - len(fetched))
-                
-                result, next_token = reviews(
-                    self.app_id,
-                    lang=self.lang,
-                    country=self.country,
-                    sort=Sort.MOST_RELEVANT,
-                    filter_score_with=None,
-                    count=count,
-                    continuation_token=next_token,
-                )
-                
-                if result:
-                    newest_date = result[0]['at']
-                    self.logger.info(f"Batch fetched. Newest review in this batch: {newest_date}")
-
-                fetched.extend(result)
-                self.logger.info(f"Fetched {len(fetched)} reviews so far...")
-                
-                if not next_token:
+        Returns:
+            pd.DataFrame: DataFrame containing reviews
+        """
+        from datetime import datetime, timedelta
+        
+        max_reviews = max_reviews or 5000
+        cutoff_date = datetime.now() - timedelta(days=days)
+        
+        all_reviews = []
+        seen_ids = set()
+        
+        try:
+            # Fetch reviews for each rating (1-5 stars)
+            for rating in [1, 2, 3, 4, 5]:
+                if len(all_reviews) >= max_reviews:
+                    self.logger.info(f"Reached max_reviews limit ({max_reviews}), stopping")
                     break
                     
-            self.logger.info(f"Total reviews fetched: {len(fetched)}")
-            return fetched
+                self.logger.info(f"Fetching {rating}-star reviews...")
+                rating_reviews = []
+                continuation_token = None
+                
+                # Fetch up to 1000 reviews per rating
+                while len(rating_reviews) < 1000:
+                    try:
+                        result, continuation_token = reviews(
+                            self.app_id,
+                            lang=self.lang,
+                            country=self.country,
+                            sort=Sort.NEWEST,
+                            filter_score_with=rating,
+                            count=200,
+                            continuation_token=continuation_token
+                        )
+                        
+                        if not result:
+                            break
+                        
+                        rating_reviews.extend(result)
+                        
+                        if not continuation_token:
+                            break
+                            
+                    except Exception as e:
+                        self.logger.warning(f"Error fetching {rating}-star reviews: {e}")
+                        break
+                
+                # Filter for last N days and deduplicate
+                for review in rating_reviews:
+                    review_id = review.get('reviewId')
+                    review_date = review.get('at')
+                    
+                    if review_id and review_id not in seen_ids and review_date >= cutoff_date:
+                        all_reviews.append(review)
+                        seen_ids.add(review_id)
+                        
+                        if len(all_reviews) >= max_reviews:
+                            break
+                
+                self.logger.info(f"Added {len([r for r in rating_reviews if r.get('at') >= cutoff_date])} {rating}-star reviews from last {days} days")
+            
+            # Client-side sort to ensure strict date ordering
+            all_reviews.sort(key=lambda x: x['at'], reverse=True)
+            self.logger.info(f"Total reviews fetched: {len(all_reviews)} (from last {days} days)")
+            
+            # Process reviews to DataFrame
+            return self.process_reviews(all_reviews)
+            
         except Exception as e:
             self.logger.error(f"Error fetching reviews: {str(e)}")
-            return []
+            return pd.DataFrame()
 
     def process_reviews(self, reviews: List[Dict]) -> pd.DataFrame:
         """Process raw reviews into a structured DataFrame.
@@ -129,5 +161,4 @@ class GooglePlayScraper:
         Returns:
             pd.DataFrame: Processed reviews
         """
-        reviews = self.fetch_reviews(days=days, max_reviews=max_reviews)
-        return self.process_reviews(reviews)
+        return self.fetch_reviews(days=days, max_reviews=max_reviews)

@@ -17,7 +17,7 @@ APPS = {
 
 # Scraper Settings
 SCRAPE_DAYS = int(os.getenv('SCRAPE_DAYS', 7))
-MAX_REVIEWS = int(os.getenv('MAX_REVIEWS', 1000))
+MAX_REVIEWS = int(os.getenv('MAX_REVIEWS', 5000))
 
 # Database
 DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///reviews.db')

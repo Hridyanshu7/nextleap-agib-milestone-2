@@ -315,7 +315,8 @@ Do not include any other text or explanation."""
             ].sort_values('review_date', ascending=False).head(5)[['review_date', 'rating', 'safe_text']].rename(columns={'safe_text': 'review_text'}).to_dict('records'),
             "top_themes": self.extract_themes(df),
             "user_quotes": self.select_representative_quotes(df),
-            "action_ideas": self.generate_action_ideas(df)
+            "action_ideas": self.generate_action_ideas(df),
+            "sentiment_scores": df['sentiment_score'].tolist()
         }
         
         return summary

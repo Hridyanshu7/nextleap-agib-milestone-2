@@ -6,9 +6,10 @@ This project now supports **LLM-powered analysis** using Google's Gemini API for
 
 When a Gemini API key is configured, the system uses AI to enhance:
 
-### 1. **Theme Extraction**
+### 1. **Qualitative Theme Extraction**
 - **Basic**: Uses noun phrase frequency analysis
-- **LLM-Enhanced**: Identifies contextual themes with better grouping (e.g., "Payment Issues", "Delivery Experience", "Customer Support")
+- **LLM-Enhanced**: Infers **5 broad, qualitative themes** based on user sentiment and context (e.g., "Unreliable Delivery Service" instead of just "delivery").
+- **Smart Extrapolation**: Counts are estimated from a sample and scientifically extrapolated to reflect the entire dataset volume.
 
 ### 2. **Action Ideas**
 - **Basic**: Generic suggestions based on keyword frequency
@@ -17,6 +18,9 @@ When a Gemini API key is configured, the system uses AI to enhance:
 ### 3. **User Quotes**
 - **Basic**: Random sampling
 - **LLM-Enhanced**: Intelligently selects the most representative quotes that cover different aspects of user experience
+
+### 4. **Visual Insights** (New!)
+- **Sentiment Distribution Chart**: A beautiful area chart (KDE plot) in the email report showing the continuous distribution of sentiment scores, helping you visualize the polarity of user feedback at a glance.
 
 ## Setup
 
@@ -41,7 +45,7 @@ GEMINI_API_KEY=your-api-key-here
 pip install -r requirements.txt
 ```
 
-This will install `google-generativeai` along with other dependencies.
+This will install `google-generativeai`, `matplotlib`, and `seaborn`.
 
 ## How It Works
 
@@ -50,9 +54,10 @@ The `ReviewAnalyzer` class automatically detects if a Gemini API key is availabl
 - **With API Key**: Uses LLM-powered analysis for themes, quotes, and action ideas
 - **Without API Key**: Falls back to basic TextBlob-based analysis
 
-### Fallback Behavior
+### Robustness & Fallback
 
-If the LLM call fails (network issues, API limits, etc.), the system automatically falls back to the basic analysis method, ensuring your reports are always generated.
+- **JSON Parsing**: The system now robustly handles LLM responses, stripping markdown and extra text to prevent parsing errors.
+- **Fallback**: If the LLM call fails (network issues, API limits), the system automatically falls back to the basic analysis method.
 
 ## Cost Considerations
 
@@ -74,7 +79,7 @@ If the LLM call fails (network issues, API limits, etc.), the system automatical
 **Action**: "Investigate issues related to 'customer service'"
 
 ### LLM-Enhanced Analysis
-**Themes**: "Payment Processing Failures", "Late Delivery Issues", "App Crashes on Checkout"
+**Themes**: "Payment Processing Failures", "Late Delivery Issues", "App Crashes on Checkout", "Rude Support Staff", "Hidden Charges"
 **Action**: "Implement retry logic for failed payment transactions and add user-friendly error messages"
 
 ## Disabling LLM Analysis

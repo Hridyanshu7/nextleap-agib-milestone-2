@@ -98,12 +98,12 @@ def parse_play_url(url: str):
             
     return {'package_name': pkg, 'lang': lang, 'country': country}
 
-def lookup_apple_app(package_name: str):
+def lookup_apple_app(package_name: str, country: str = 'us'):
     """Check if an app with the given Android package exists on the Apple App Store.
     Returns a tuple (app_id, app_name) if found, otherwise (None, None).
     """
     try:
-        resp = requests.get('https://itunes.apple.com/lookup', params={'bundleId': package_name}, timeout=10)
+        resp = requests.get('https://itunes.apple.com/lookup', params={'bundleId': package_name, 'country': country}, timeout=10)
         data = resp.json()
         if data.get('resultCount', 0) > 0:
             result = data['results'][0]
@@ -153,11 +153,34 @@ def run_scraper():
     else:
         logger.info("No Google Play reviews fetched.")
 
-    apple_id, apple_name = lookup_apple_app(package_name)
+    # Try to find corresponding Apple App Store app
+    apple_id, apple_name = lookup_apple_app(package_name, country)
+    
+    if not apple_id:
+        logger.info("Automatic Apple App Store lookup failed.")
+        apple_url = input("Enter Apple App Store URL (or press Enter to skip): ").strip()
+        if apple_url:
+            # Extract ID and country from URL
+            # Format: https://apps.apple.com/in/app/zepto-grocery-delivery/id1575323645
+            try:
+                import re
+                id_match = re.search(r'id(\d+)', apple_url)
+                country_match = re.search(r'apple\.com/([a-z]{2})/', apple_url)
+                
+                if id_match:
+                    apple_id = id_match.group(1)
+                    apple_name = app_name # Use Google Play name as fallback
+                    # Update country if found in URL, otherwise keep Google Play country
+                    if country_match:
+                        country = country_match.group(1)
+                    logger.info(f"Extracted Apple App ID: {apple_id}, Country: {country}")
+            except Exception as e:
+                logger.error(f"Failed to parse Apple URL: {e}")
+
     if apple_id:
-        logger.info(f"App found on Apple App Store: {apple_name} (ID: {apple_id})")
-        as_scraper = AppStoreScraper(apple_name, apple_id)
-        as_reviews = as_scraper.get_reviews(days=config.SCRAPE_DAYS, max_reviews=config.MAX_REVIEWS)
+        logger.info(f"Found Apple App Store app: {apple_name} (ID: {apple_id})")
+        as_scraper = AppStoreScraper(country=country, app_name=apple_name, app_id=apple_id)
+        as_reviews = as_scraper.fetch_reviews(count=config.MAX_REVIEWS, days=config.SCRAPE_DAYS)
         if not as_reviews.empty:
             logger.info("Analyzing Apple App Store reviews...")
             as_reviews['sentiment_score'] = as_reviews['review_text'].apply(lambda x: analyzer.analyze_sentiment(x)[1])
@@ -166,13 +189,20 @@ def run_scraper():
             )
             save_reviews_to_db(as_reviews, apple_id)
             all_reviews.append(as_reviews)
+            logger.info(f"Added {len(as_reviews)} Apple App Store reviews")
         else:
             logger.info("Apple App Store returned no reviews.")
     else:
-        logger.info("App not found on Apple App Store; skipping Apple scraping.")
+        logger.info("Skipping Apple App Store scraping.")
 
     if all_reviews:
         combined_df = pd.concat(all_reviews, ignore_index=True)
+        
+        # Cap at 5000 total reviews, keeping the most recent
+        if len(combined_df) > 5000:
+            combined_df = combined_df.sort_values('review_date', ascending=False).head(5000)
+            logger.info(f"Capped total reviews at 5000 (from {len(pd.concat(all_reviews, ignore_index=True))})")
+        
         summary = analyzer.generate_summary(combined_df)
         print("\n" + "="*50)
         print("REVIEW SUMMARY REPORT")

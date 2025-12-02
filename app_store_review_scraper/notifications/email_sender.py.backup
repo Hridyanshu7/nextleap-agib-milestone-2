@@ -2,7 +2,6 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
-from email.mime.image import MIMEImage
 from email import encoders
 from typing import Dict, List, Optional
 import logging
@@ -10,12 +9,6 @@ from datetime import datetime, timedelta
 import pandas as pd
 import os
 import tempfile
-import io
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-# Set non-interactive backend for matplotlib
-plt.switch_backend('Agg')
 
 class EmailSender:
     """
@@ -166,10 +159,6 @@ class EmailSender:
                     </div>
                 </div>
             </div>
-            
-            <div style="text-align: center; margin: 20px 0;">
-                <img src="cid:rating_chart" alt="Rating Distribution Chart" style="max-width: 100%; border-radius: 8px; border: 1px solid #ddd;">
-            </div>
 
             <h2 class="section-title">🔥 Top 5 Themes</h2>
             <ul style="list-style-type: none; padding: 0;">
@@ -199,10 +188,6 @@ class EmailSender:
                 </tbody>
             </table>
             
-            <div style="text-align: center; margin: 20px 0;">
-                <img src="cid:sentiment_chart" alt="Sentiment Distribution Chart" style="max-width: 100%; border-radius: 8px; border: 1px solid #ddd;">
-            </div>
-            
             <h2 class="section-title">🔑 Top Keywords</h2>
             <ul style="list-style-type: none; padding: 0;">
                 {keyword_items}
@@ -220,56 +205,31 @@ class EmailSender:
         
         return html
     
-    def send_email(self, recipients: List[str], subject: str, html_content: str, 
-                  attachment_path: Optional[str] = None,
-                  sentiment_chart: Optional[bytes] = None,
-                  rating_chart: Optional[bytes] = None) -> bool:
+    def send_email(self, recipients: List[str], subject: str, html_content: str, attachment_path: Optional[str] = None) -> bool:
         """
-        Send an email to recipients with inline chart images.
+        Send an email to recipients.
         
         Args:
             recipients (List[str]): List of recipient email addresses
             subject (str): Email subject
             html_content (str): HTML content of the email
-            attachment_path (str, optional): Path to file attachment
-            sentiment_chart (bytes, optional): Sentiment chart image bytes
-            rating_chart (bytes, optional): Rating chart image bytes
+            attachment_path (str, optional): Path to file to attach
             
         Returns:
             bool: True if email sent successfully, False otherwise
         """
         try:
-            # Create message with multipart/related for inline images
-            msg = MIMEMultipart('related')
+            # Create message
+            msg = MIMEMultipart('mixed')
             msg['Subject'] = subject
             msg['From'] = self.username
             msg['To'] = ', '.join(recipients)
             
-            # Create alternative part for HTML
-            msg_alternative = MIMEMultipart('alternative')
-            msg.attach(msg_alternative)
-            
             # Attach HTML content
             html_part = MIMEText(html_content, 'html')
-            msg_alternative.attach(html_part)
+            msg.attach(html_part)
             
-            # Attach sentiment chart as inline image
-            if sentiment_chart:
-                img = MIMEImage(sentiment_chart)
-                img.add_header('Content-ID', '<sentiment_chart>')
-                img.add_header('Content-Disposition', 'inline', filename='sentiment_chart.png')
-                msg.attach(img)
-                self.logger.info(f"Attached sentiment chart: {len(sentiment_chart)} bytes")
-            
-            # Attach rating chart as inline image
-            if rating_chart:
-                img = MIMEImage(rating_chart)
-                img.add_header('Content-ID', '<rating_chart>')
-                img.add_header('Content-Disposition', 'inline', filename='rating_chart.png')
-                msg.attach(img)
-                self.logger.info(f"Attached rating chart: {len(rating_chart)} bytes")
-            
-            # Attach Excel file if provided
+            # Attach file if provided
             if attachment_path and os.path.exists(attachment_path):
                 with open(attachment_path, 'rb') as f:
                     part = MIMEBase('application', 'octet-stream')
@@ -375,118 +335,10 @@ class EmailSender:
         self.logger.info(f"Created Excel file: {filepath}")
         return filepath
     
-    def create_sentiment_chart(self, scores: List[float]) -> Optional[bytes]:
-        """
-        Create a sentiment distribution chart (KDE plot).
-        
-        Args:
-            scores (List[float]): List of sentiment scores
-            
-        Returns:
-            bytes: PNG image data
-        """
-        if not scores or len(scores) < 2:
-            self.logger.warning("Not enough sentiment scores to generate chart")
-            return None
-            
-        try:
-            plt.figure(figsize=(8, 4))
-            sns.set_style("whitegrid")
-            
-            # Create KDE plot with fill
-            try:
-                sns.kdeplot(scores, fill=True, color="#667eea", alpha=0.6)
-            except TypeError:
-                # Fallback for older seaborn versions
-                sns.kdeplot(scores, shade=True, color="#667eea", alpha=0.6)
-            except Exception as e:
-                # Fallback to histogram if KDE fails
-                self.logger.warning(f"KDE plot failed, falling back to histogram: {e}")
-                plt.hist(scores, bins=20, color="#667eea", alpha=0.6, density=True)
-            
-            plt.title('Sentiment Score Distribution', fontsize=14, pad=15)
-            plt.xlabel('Sentiment Score (-1 to +1)', fontsize=10)
-            plt.ylabel('Density', fontsize=10)
-            plt.xlim(-1, 1)
-            
-            # Add vertical lines for neutral zone
-            plt.axvline(x=-0.1, color='gray', linestyle='--', alpha=0.5)
-            plt.axvline(x=0.1, color='gray', linestyle='--', alpha=0.5)
-            plt.text(-0.55, plt.ylim()[1]*0.9, 'Negative', ha='center', color='#e53e3e')
-            plt.text(0, plt.ylim()[1]*0.9, 'Neutral', ha='center', color='#718096')
-            plt.text(0.55, plt.ylim()[1]*0.9, 'Positive', ha='center', color='#38a169')
-            
-            plt.tight_layout()
-            
-            # Save to buffer
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png', dpi=100)
-            plt.close()
-            buf.seek(0)
-            return buf.getvalue()
-            
-        except Exception as e:
-            self.logger.error(f"Error creating sentiment chart: {str(e)}")
-            return None
-    
-    def create_rating_distribution_chart(self, ratings: List[int]) -> Optional[bytes]:
-        """
-        Create a rating distribution bar chart.
-        
-        Args:
-            ratings (List[int]): List of ratings (1-5)
-            
-        Returns:
-            bytes: PNG image data
-        """
-        if not ratings:
-            return None
-            
-        try:
-            # Count ratings
-            rating_counts = pd.Series(ratings).value_counts().sort_index()
-            
-            # Ensure all ratings 1-5 are present
-            for i in range(1, 6):
-                if i not in rating_counts.index:
-                    rating_counts[i] = 0
-            rating_counts = rating_counts.sort_index()
-            
-            # Create bar chart
-            plt.figure(figsize=(8, 4))
-            colors = ['#e53e3e', '#ed8936', '#ecc94b', '#48bb78', '#38a169']
-            bars = plt.bar(rating_counts.index, rating_counts.values, color=colors, alpha=0.8, edgecolor='black')
-            
-            # Add count labels on bars
-            for bar in bars:
-                height = bar.get_height()
-                plt.text(bar.get_x() + bar.get_width()/2., height,
-                        f'{int(height)}',
-                        ha='center', va='bottom', fontsize=10, fontweight='bold')
-            
-            plt.title('Rating Distribution', fontsize=14, pad=15)
-            plt.xlabel('Rating (Stars)', fontsize=10)
-            plt.ylabel('Number of Reviews', fontsize=10)
-            # Use text labels instead of emojis to avoid rendering issues
-            plt.xticks([1, 2, 3, 4, 5], ['1 Star', '2 Stars', '3 Stars', '4 Stars', '5 Stars'])
-            plt.grid(axis='y', alpha=0.3)
-            plt.tight_layout()
-            
-            # Save to buffer
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png', dpi=100)
-            plt.close()
-            buf.seek(0)
-            return buf.getvalue()
-            
-        except Exception as e:
-            self.logger.error(f"Error creating rating distribution chart: {str(e)}")
-            return None
-
     def send_summary_report(self, summary: Dict, app_name: str, recipients: List[str], 
                           reviews_df: Optional[pd.DataFrame] = None, days: int = 7) -> bool:
         """
-        Send a summary report email with Excel attachment and charts.
+        Send a summary report email with Excel attachment.
         
         Args:
             summary (Dict): Summary data from ReviewAnalyzer
@@ -502,32 +354,7 @@ class EmailSender:
         date_range = self.format_date_range(days)
         subject = f"📊 Weekly App Review Summary [{date_range}] - {app_name}"
         
-        # Generate charts as bytes
-        sentiment_chart_bytes = None
-        if 'sentiment_scores' in summary:
-            scores = summary['sentiment_scores']
-            self.logger.info(f"Generating sentiment chart for {len(scores)} scores")
-            sentiment_chart_bytes = self.create_sentiment_chart(scores)
-            if sentiment_chart_bytes:
-                self.logger.info(f"Sentiment chart generated successfully: {len(sentiment_chart_bytes)} bytes")
-            else:
-                self.logger.warning("Sentiment chart generation returned None")
-        else:
-            self.logger.warning("No 'sentiment_scores' found in summary")
-            
-        rating_chart_bytes = None
-        if reviews_df is not None and not reviews_df.empty and 'rating' in reviews_df.columns:
-            ratings = reviews_df['rating'].tolist()
-            self.logger.info(f"Generating rating chart for {len(ratings)} ratings")
-            rating_chart_bytes = self.create_rating_distribution_chart(ratings)
-            if rating_chart_bytes:
-                self.logger.info(f"Rating chart generated successfully: {len(rating_chart_bytes)} bytes")
-            else:
-                self.logger.warning("Rating chart generation returned None")
-        else:
-            self.logger.warning("Skipping rating chart: reviews_df check failed")
-        
-        # Create HTML content with CID references
+        # Create HTML content
         html_content = self.create_html_report(summary, app_name)
         
         # Create Excel attachment if reviews data provided
@@ -538,10 +365,8 @@ class EmailSender:
             except Exception as e:
                 self.logger.error(f"Error creating Excel attachment: {str(e)}")
         
-        # Send email with chart images
-        self.logger.info("Sending email with attachments...")
-        result = self.send_email(recipients, subject, html_content, attachment_path, 
-                                sentiment_chart_bytes, rating_chart_bytes)
+        # Send email
+        result = self.send_email(recipients, subject, html_content, attachment_path)
         
         # Clean up temporary file
         if attachment_path and os.path.exists(attachment_path):
