@@ -1,4 +1,4 @@
-# App Store Review Scraper
+# App Store Review Scraper and Insights Mailer
 
 An automated system to scrape, analyze, and summarize app reviews from Google Play Store and Apple App Store. The system provides sentiment analysis, keyword extraction, and automated email reports.
 
